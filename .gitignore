@@ -13,6 +13,7 @@ Cargo.lock
 test_*_data/
 test_data/
 test_run/
+rigorous_test/
 data/
 *.pyc
 __pycache__/
