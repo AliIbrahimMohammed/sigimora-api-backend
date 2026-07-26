@@ -6,6 +6,7 @@ members = [
     "sigimora-refresh",
     "sigimora-mcp",
     "sigimora-server",
+    "sigimora-cli",
 ]
 resolver = "2"
 

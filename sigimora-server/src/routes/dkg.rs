@@ -57,10 +57,14 @@ pub async fn run_dkg(
         })
         .collect();
 
-    // Exchange commitments
+    // Exchange commitments (with proof-of-possession)
     let pks: Vec<_> = dkg_states
         .iter()
         .map(|s| s.my_public_key().unwrap())
+        .collect();
+    let pops: Vec<_> = dkg_states
+        .iter()
+        .map(|s| s.my_pop().unwrap())
         .collect();
     let vss_list: Vec<_> = dkg_states
         .iter()
@@ -74,7 +78,7 @@ pub async fn run_dkg(
                     commitments: vss_list[i].commitments.clone(),
                 };
                 dkg_states[j]
-                    .process_participant_commit(i as u16 + 1, pks[i].clone(), vss)
+                    .process_participant_commit(i as u16 + 1, pks[i].clone(), pops[i].clone(), vss)
                     .map_err(|e| ApiError::Crypto(format!("DKG commit processing: {}", e)))?;
             }
         }

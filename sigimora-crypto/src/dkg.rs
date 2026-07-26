@@ -35,11 +35,30 @@ use crate::pedersen::{PedersenSetup, VssPublic, VssShare, PrivatePoly as Pederse
 
 pub type ParticipantId = u16;
 
+/// Generate a BLS proof-of-possession: π = H(pk)^sk ∈ G₁.
+/// Verification: e(π, g₂) == e(H(pk), pk)
+pub fn generate_pop(sk: &Scalar, pk: &G2Point) -> G1Point {
+    let pk_bytes = pk.to_bytes();
+    let h = sigimora_math::hash_to_g1(&pk_bytes, b"SIGIMORA_POP");
+    h.mul(sk)
+}
+
+/// Verify a BLS proof-of-possession against a public key.
+/// Checks e(π, g₂) == e(H(pk), pk) using BLS12-381 pairing.
+pub fn verify_pop(pk: &G2Point, pop: &G1Point) -> bool {
+    let pk_bytes = pk.to_bytes();
+    let h = sigimora_math::hash_to_g1(&pk_bytes, b"SIGIMORA_POP");
+    let lhs = sigimora_math::pairing::pairing(pop, &G2Point::generator());
+    let rhs = sigimora_math::pairing::pairing(&h, pk);
+    lhs == rhs
+}
+
 #[derive(Clone, Debug)]
 pub enum DkgMessage {
     Commit {
         from: ParticipantId,
         public_key: G2Point,
+        pop: G1Point,
         vss_public: VssPublic,
     },
     Share {
@@ -67,11 +86,12 @@ pub enum DkgMessage {
 impl DkgMessage {
     pub fn serialize(&self) -> Result<Vec<u8>, CryptoError> {
         match self {
-            DkgMessage::Commit { from, public_key, vss_public } => {
+            DkgMessage::Commit { from, public_key, pop, vss_public } => {
                 let mut bytes = vec![0u8; 2];
                 bytes[0..2].copy_from_slice(&from.to_le_bytes());
                 bytes.push(1u8);
                 bytes.extend_from_slice(&public_key.to_bytes());
+                bytes.extend_from_slice(&pop.to_bytes());
                 let vss_bytes = serialize_vss_public(vss_public);
                 bytes.extend_from_slice(&vss_bytes);
                 Ok(bytes)
@@ -127,8 +147,11 @@ impl DkgMessage {
                 let mut pk_bytes = [0u8; 96];
                 pk_bytes.copy_from_slice(&data[3..99]);
                 let public_key = G2Point::from_bytes(&pk_bytes).map_err(|_| CryptoError::InvalidParameter("invalid pk".to_string()))?;
-                let vss_public = deserialize_vss_public(&data[99..]);
-                Ok(DkgMessage::Commit { from, public_key, vss_public })
+                let mut pop_bytes = [0u8; 48];
+                pop_bytes.copy_from_slice(&data[99..147]);
+                let pop = G1Point::from_bytes(&pop_bytes).map_err(|_| CryptoError::InvalidParameter("invalid pop".to_string()))?;
+                let vss_public = deserialize_vss_public(&data[147..]);
+                Ok(DkgMessage::Commit { from, public_key, pop, vss_public })
             }
             2 => {
                 let from = u16::from_le_bytes([data[0], data[1]]);
@@ -191,9 +214,11 @@ pub struct DkgState {
     pub my_id: ParticipantId,
     pub my_secret: Option<Scalar>,
     pub my_public_key: Option<G2Point>,
+    pub my_pop: Option<G1Point>,
     pub my_vss_poly: Option<PedersenPrivatePoly>,
     pub pedersen: PedersenSetup,
     pub received_public_keys: Vec<(ParticipantId, G2Point)>,
+    pub received_pops: Vec<(ParticipantId, G1Point)>,
     pub received_vss_publics: Vec<(ParticipantId, VssPublic)>,
     pub received_shares: Vec<(ParticipantId, VssShare)>,
     pub complaints_received: Vec<(ParticipantId, ParticipantId)>,
@@ -231,9 +256,11 @@ impl Clone for DkgState {
             my_id: self.my_id,
             my_secret: self.my_secret.clone(),
             my_public_key: self.my_public_key.clone(),
+            my_pop: self.my_pop.clone(),
             my_vss_poly: self.my_vss_poly.clone(),
             pedersen: self.pedersen.clone(),
             received_public_keys: self.received_public_keys.clone(),
+            received_pops: self.received_pops.clone(),
             received_vss_publics: self.received_vss_publics.clone(),
             received_shares: self.received_shares.clone(),
             complaints_received: self.complaints_received.clone(),
@@ -304,9 +331,11 @@ impl DkgState {
             my_id,
             my_secret: None,
             my_public_key: None,
+            my_pop: None,
             my_vss_poly: None,
             pedersen,
             received_public_keys: Vec::new(),
+            received_pops: Vec::new(),
             received_vss_publics: Vec::new(),
             received_shares: Vec::new(),
             complaints_received: Vec::new(),
@@ -418,8 +447,12 @@ impl DkgState {
     }
 
     pub fn start(&mut self, rng: &mut impl RngCore) {
-        self.my_secret = Some(Scalar::random(rng));
-        self.my_public_key = Some(G2Point::generator().mul(self.my_secret.as_ref().unwrap()));
+        let sk = Scalar::random(rng);
+        let pk = G2Point::generator().mul(&sk);
+        let pop = generate_pop(&sk, &pk);
+        self.my_secret = Some(sk);
+        self.my_public_key = Some(pk);
+        self.my_pop = Some(pop);
         self.my_vss_poly = Some(PedersenPrivatePoly::random_with_secret(
             self.my_secret.as_ref().unwrap().clone(),
             self.t,
@@ -432,6 +465,10 @@ impl DkgState {
         self.my_public_key.clone()
     }
 
+    pub fn my_pop(&self) -> Option<G1Point> {
+        self.my_pop.clone()
+    }
+
     pub fn my_vss_public(&self) -> Option<VssPublic> {
         self.my_vss_poly.as_ref().map(|p| p.commit())
     }
@@ -440,9 +477,15 @@ impl DkgState {
         &mut self,
         from: ParticipantId,
         public_key: G2Point,
+        pop: G1Point,
         vss_public: VssPublic,
     ) -> Result<(), CryptoError> {
+        // Verify proof-of-possession: ensures the sender knows sk corresponding to pk
+        if !verify_pop(&public_key, &pop) {
+            return Err(CryptoError::PopVerificationFailed);
+        }
         self.received_public_keys.push((from, public_key));
+        self.received_pops.push((from, pop));
         self.received_vss_publics.push((from, vss_public));
         Ok(())
     }
@@ -684,21 +727,23 @@ mod tests {
             })
             .collect();
 
-        // Collect contribution PKs y_i = g₂^{z_i} and VSS commitments
+        // Collect contribution PKs y_i = g₂^{z_i}, PoPs, and VSS commitments
         let mut all_pks: Vec<G2Point> = Vec::new();
+        let mut all_pops: Vec<G1Point> = Vec::new();
         let mut all_vss: Vec<VssPublic> = Vec::new();
         for i in 0..n {
             all_pks.push(states[i].my_public_key().unwrap());
+            all_pops.push(states[i].my_pop().unwrap());
             all_vss.push(states[i].my_vss_public().unwrap());
         }
 
-        // Phase 1: Broadcast commits (each party sends its PK + VSS to all others)
+        // Phase 1: Broadcast commits (each party sends its PK + PoP + VSS to all others)
         for i in 0..n {
             for j in 0..n {
                 if i != j {
                     let vss_pub = VssPublic { commitments: all_vss[i].commitments.clone() };
                     states[j].process_participant_commit(
-                        i as u16 + 1, all_pks[i].clone(), vss_pub,
+                        i as u16 + 1, all_pks[i].clone(), all_pops[i].clone(), vss_pub,
                     ).unwrap();
                 }
             }

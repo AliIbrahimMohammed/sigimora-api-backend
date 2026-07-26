@@ -75,9 +75,37 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
+
+// ── OpenAPI documentation ──────────────────────────────────────────────────
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "SIGIMORA API",
+        description = "BFT Accountable Threshold Signing Backend",
+        version = env!("CARGO_PKG_VERSION"),
+    ),
+    paths(
+        // Auto-discovered from route handlers with #[utoipa::path] attrs
+    ),
+    tags(
+        (name = "health", description = "Server health"),
+        (name = "networks", description = "Network management"),
+        (name = "dkg", description = "Distributed Key Generation"),
+        (name = "signing", description = "Threshold signing"),
+        (name = "verify", description = "Signature verification"),
+        (name = "trace", description = "Signer tracing"),
+        (name = "ledger", description = "Transaction ledger"),
+        (name = "nodes", description = "Node identity"),
+        (name = "api-keys", description = "API key management"),
+    ),
+)]
+struct ApiDoc;
 
 // ── Request ID middleware ─────────────────────────────────────────────────
 
@@ -157,6 +185,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = config.database_url();
     tracing::info!("Database: {}", database_url);
     let db = crate::db::Database::open(&database_url).await?;
+
+    // Register DB for audit logging
+    crate::audit::set_audit_db(db.clone());
 
     // Ensure a bootstrap admin key exists
     ensure_bootstrap_key(&db, &config).await?;
@@ -273,18 +304,22 @@ async fn ensure_bootstrap_key(
 }
 
 /// Rate limiting middleware — check against AppState per IP.
+/// Sets X-RateLimit-* headers on every response (GitHub-style).
 async fn rate_limit_middleware(
     State(state): State<AppState>,
     req: axum::extract::Request,
     next: middleware::Next,
-) -> impl axum::response::IntoResponse {
+) -> Response {
     let ip = req
         .extensions()
         .get::<std::net::SocketAddr>()
         .map(|addr| addr.ip())
         .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
 
-    if !state.rate_limiter.check(ip).await {
+    let (allowed, remaining) = state.rate_limiter.check_with_remaining(ip).await;
+    let max_reqs = state.rate_limiter.max_requests();
+
+    if !allowed {
         tracing::warn!("Rate limit exceeded for IP: {}", ip);
         let request_id = crate::error::REQUEST_ID.try_with(|id| id.clone()).ok();
         let body = axum::Json(serde_json::json!({
@@ -292,14 +327,36 @@ async fn rate_limit_middleware(
             "code": "RateLimited",
             "request_id": request_id,
         }));
-        return (
+        let mut res = (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
             body,
         )
             .into_response();
+        res.headers_mut().insert(
+            HeaderName::from_static("x-ratelimit-limit"),
+            HeaderValue::from_str(&max_reqs.to_string()).unwrap(),
+        );
+        res.headers_mut().insert(
+            HeaderName::from_static("x-ratelimit-remaining"),
+            HeaderValue::from_str("0").unwrap(),
+        );
+        return res;
     }
 
-    next.run(req).await
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        HeaderName::from_static("x-ratelimit-limit"),
+        HeaderValue::from_str(&max_reqs.to_string()).unwrap(),
+    );
+    res.headers_mut().insert(
+        HeaderName::from_static("x-ratelimit-remaining"),
+        HeaderValue::from_str(&remaining.to_string()).unwrap(),
+    );
+    res.headers_mut().insert(
+        HeaderName::from_static("x-ratelimit-reset"),
+        HeaderValue::from_static("60"),
+    );
+    res
 }
 
 /// Build the Axum router with all routes and middleware layers.
@@ -344,6 +401,8 @@ fn build_router(
         .layer(security_headers);
 
     let router = Router::new()
+        // Swagger UI (no auth required)
+        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
         // Health (no auth required)
         .route("/api/v1/health", get(routes::health::health_check))
         // Networks

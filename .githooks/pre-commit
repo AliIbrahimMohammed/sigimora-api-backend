@@ -1,0 +1,34 @@
+#!/bin/bash
+# Pre-commit hook for SIGIMORA
+# Runs formatting, linting, and tests before every commit.
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "=== Pre-commit checks ==="
+
+# 1. Check formatting
+echo "[1/3] Checking code formatting..."
+cargo fmt --check --workspace 2>/dev/null || {
+    echo "ERROR: Code formatting issues found. Run 'cargo fmt --workspace' to fix."
+    exit 1
+}
+echo "  ✓ OK"
+
+# 2. Run clippy
+echo "[2/3] Running clippy..."
+cargo clippy --workspace -- -D warnings 2>/dev/null || {
+    echo "ERROR: Clippy found issues. Fix them before committing."
+    exit 1
+}
+echo "  ✓ OK"
+
+# 3. Run tests
+echo "[3/3] Running tests..."
+cargo test --workspace 2>/dev/null || {
+    echo "ERROR: Tests failed. Fix them before committing."
+    exit 1
+}
+echo "  ✓ All tests passed"
+
+echo "=== Pre-commit checks passed ==="

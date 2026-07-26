@@ -57,6 +57,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # ——— Async helpers ———
 futures = "0.3"
 
+# ——— OpenAPI / Swagger ———
+utoipa = { version = "5", features = ["axum_extras", "uuid"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
 # ——— TLS (optional) ———
 tokio-rustls = "0.26"
 rustls = "0.23"

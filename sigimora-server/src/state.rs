@@ -42,17 +42,42 @@ impl RateLimiter {
             .or_insert(Window { count: 0, start: now });
 
         if now.duration_since(window.start).as_secs() >= self.window_secs {
-            // Reset window
             window.count = 0;
             window.start = now;
         }
 
         if window.count >= self.max_requests {
-            return false; // Rate limited
+            return false;
         }
 
         window.count += 1;
         true
+    }
+
+    /// Like `check` but also returns the remaining count for the current window.
+    pub async fn check_with_remaining(&self, ip: IpAddr) -> (bool, u64) {
+        let mut map = self.inner.write().await;
+        let now = std::time::Instant::now();
+        let window = map
+            .entry(ip)
+            .or_insert(Window { count: 0, start: now });
+
+        if now.duration_since(window.start).as_secs() >= self.window_secs {
+            window.count = 0;
+            window.start = now;
+        }
+
+        if window.count >= self.max_requests {
+            return (false, 0);
+        }
+
+        window.count += 1;
+        (true, self.max_requests.saturating_sub(window.count))
+    }
+
+    /// Maximum requests per window.
+    pub fn max_requests(&self) -> u64 {
+        self.max_requests
     }
 }
 

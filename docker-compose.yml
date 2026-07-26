@@ -1,0 +1,29 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# SIGIMORA — Docker Compose (one-command deploy)
+# ──────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+services:
+  sigimora:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SIGIMORA_LISTEN: "0.0.0.0:8080"
+      SIGIMORA_DATA_DIR: "/var/lib/sigimora/data"
+      SIGIMORA_LOG_LEVEL: "info"
+      SIGIMORA_BOOTSTRAP_KEYS: "${SIGIMORA_BOOTSTRAP_KEYS:-}"
+      SIGIMORA_RATE_LIMIT: "120"
+      SIGIMORA_MAX_BODY: "20971520"
+    volumes:
+      - sigimora_data:/var/lib/sigimora/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  sigimora_data:

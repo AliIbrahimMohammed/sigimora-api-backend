@@ -9,6 +9,101 @@ use std::str::FromStr;
 
 use crate::error::ApiError;
 
+/// One versioned migration.
+struct Migration {
+    version: i64,
+    name: &'static str,
+    sql: &'static str,
+}
+
+/// Ordered list of schema migrations.
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_schema",
+        sql: "
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version     INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL,
+                applied_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id          TEXT PRIMARY KEY,
+                key_hash    TEXT NOT NULL,
+                key_prefix  TEXT NOT NULL,
+                label       TEXT NOT NULL,
+                role        TEXT NOT NULL DEFAULT 'user',
+                created_at  TEXT NOT NULL,
+                last_used_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS networks (
+                id               TEXT PRIMARY KEY,
+                n                INTEGER NOT NULL,
+                t                INTEGER NOT NULL,
+                f                INTEGER NOT NULL,
+                quorum           INTEGER NOT NULL,
+                collective_pk    BLOB,
+                tracking_pk      BLOB,
+                tracking_sk      BLOB,
+                state            TEXT NOT NULL DEFAULT 'created',
+                created_at       TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS nodes (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id        INTEGER NOT NULL,
+                network_id     TEXT NOT NULL REFERENCES networks(id),
+                public_key     BLOB NOT NULL,
+                secret_key     BLOB NOT NULL,
+                company_name   TEXT,
+                epoch          INTEGER NOT NULL DEFAULT 0,
+                created_at     TEXT NOT NULL,
+                UNIQUE(node_id, network_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS ledger (
+                block_index    INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_id          TEXT NOT NULL,
+                network_id     TEXT NOT NULL REFERENCES networks(id),
+                message_hash   BLOB NOT NULL,
+                signature      BLOB,
+                signers        TEXT NOT NULL,
+                epoch          INTEGER NOT NULL DEFAULT 0,
+                created_at     TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS signed_txs (
+                tx_id          TEXT PRIMARY KEY,
+                network_id     TEXT NOT NULL REFERENCES networks(id),
+                message        BLOB NOT NULL,
+                signature      BLOB NOT NULL,
+                quorum         TEXT NOT NULL,
+                created_at     TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ledger_network ON ledger(network_id);
+            CREATE INDEX IF NOT EXISTS idx_nodes_network ON nodes(network_id);
+            CREATE INDEX IF NOT EXISTS idx_signed_txs_network ON signed_txs(network_id);
+        ",
+    },
+    Migration {
+        version: 2,
+        name: "audit_log_table",
+        sql: "
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                actor       TEXT NOT NULL,
+                target      TEXT NOT NULL,
+                details     TEXT NOT NULL
+            );
+        ",
+    },
+];
+
 /// Shared database handle.
 #[derive(Clone)]
 pub struct Database {
@@ -29,98 +124,57 @@ impl Database {
             .await?;
 
         let db = Database { pool };
-        db.run_migrations().await?;
+        db.run_versioned_migrations().await?;
         Ok(db)
     }
 
-    async fn run_migrations(&self) -> Result<(), ApiError> {
+    /// Run all pending versioned migrations in order.
+    async fn run_versioned_migrations(&self) -> Result<(), ApiError> {
+        // Ensure the schema_version table exists first
         sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS api_keys (
-                id          TEXT PRIMARY KEY,
-                key_hash    TEXT NOT NULL,
-                key_prefix  TEXT NOT NULL,
-                label       TEXT NOT NULL,
-                role        TEXT NOT NULL DEFAULT 'user',
-                created_at  TEXT NOT NULL,
-                last_used_at TEXT
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version     INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL,
+                applied_at  TEXT NOT NULL
             );"
         ).execute(&self.pool).await?;
 
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS networks (
-                id               TEXT PRIMARY KEY,
-                n                INTEGER NOT NULL,
-                t                INTEGER NOT NULL,
-                f                INTEGER NOT NULL,
-                quorum           INTEGER NOT NULL,
-                collective_pk    BLOB,
-                tracking_pk      BLOB,
-                tracking_sk      BLOB,
-                state            TEXT NOT NULL DEFAULT 'created',
-                created_at       TEXT NOT NULL
-            );"
-        ).execute(&self.pool).await?;
+        let applied: Vec<i64> = sqlx::query_as::<_, (i64,)>(
+            "SELECT version FROM schema_version ORDER BY version",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|(v,)| v)
+        .collect();
 
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS nodes (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                node_id        INTEGER NOT NULL,
-                network_id     TEXT NOT NULL REFERENCES networks(id),
-                public_key     BLOB NOT NULL,
-                secret_key     BLOB NOT NULL,
-                company_name   TEXT,
-                epoch          INTEGER NOT NULL DEFAULT 0,
-                created_at     TEXT NOT NULL,
-                UNIQUE(node_id, network_id)
-            );"
-        ).execute(&self.pool).await?;
+        for migration in MIGRATIONS {
+            if applied.contains(&migration.version) {
+                continue;
+            }
 
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS ledger (
-                block_index    INTEGER PRIMARY KEY AUTOINCREMENT,
-                tx_id          TEXT NOT NULL,
-                network_id     TEXT NOT NULL REFERENCES networks(id),
-                message_hash   BLOB NOT NULL,
-                signature      BLOB,
-                signers        TEXT NOT NULL,
-                epoch          INTEGER NOT NULL DEFAULT 0,
-                created_at     TEXT NOT NULL
-            );"
-        ).execute(&self.pool).await?;
+            tracing::info!("Applying migration v{}: {}", migration.version, migration.name);
 
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS signed_txs (
-                tx_id          TEXT PRIMARY KEY,
-                network_id     TEXT NOT NULL REFERENCES networks(id),
-                message        BLOB NOT NULL,
-                signature      BLOB NOT NULL,
-                quorum         TEXT NOT NULL,
-                created_at     TEXT NOT NULL
-            );"
-        ).execute(&self.pool).await?;
+            // Apply migration SQL (split by semicolons for multi-statement)
+            for stmt in migration.sql.split(';') {
+                let trimmed = stmt.trim();
+                if !trimmed.is_empty() {
+                    sqlx::raw_sql(trimmed).execute(&self.pool).await?;
+                }
+            }
 
-        sqlx::raw_sql(
-            "CREATE INDEX IF NOT EXISTS idx_ledger_network ON ledger(network_id);"
-        ).execute(&self.pool).await?;
+            // Record migration
+            sqlx::query(
+                "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)",
+            )
+            .bind(migration.version)
+            .bind(migration.name)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await?;
 
-        sqlx::raw_sql(
-            "CREATE INDEX IF NOT EXISTS idx_nodes_network ON nodes(network_id);"
-        ).execute(&self.pool).await?;
-
-        sqlx::raw_sql(
-            "CREATE INDEX IF NOT EXISTS idx_signed_txs_network ON signed_txs(network_id);"
-        ).execute(&self.pool).await?;
-
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS audit_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   TEXT NOT NULL,
-                action      TEXT NOT NULL,
-                actor       TEXT NOT NULL,
-                target      TEXT NOT NULL,
-                details     TEXT NOT NULL
-            );"
-        ).execute(&self.pool).await?;
+            tracing::info!("Migration v{} applied", migration.version);
+        }
 
         Ok(())
     }
@@ -396,6 +450,29 @@ impl Database {
     }
 
     // ── Signed transactions ────────────────────────────────────────────
+
+    // ── Audit log operations ───────────────────────────────────────────
+
+    pub async fn insert_audit_log(&self, action: &str, actor: &str, target: &str, details: &str) -> Result<(), ApiError> {
+        sqlx::query(
+            "INSERT INTO audit_log (timestamp, action, actor, target, details) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(action)
+        .bind(actor)
+        .bind(target)
+        .bind(details)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn count_audit_logs(&self) -> Result<usize, ApiError> {
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_log")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count as usize)
+    }
 
     pub async fn insert_signed_tx(&self, tx: &SignedTxRow) -> Result<(), ApiError> {
         sqlx::query(

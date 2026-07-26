@@ -552,9 +552,11 @@ mod tests {
             .collect();
 
         let mut all_pks = Vec::new();
+        let mut all_pops = Vec::new();
         let mut all_vss = Vec::new();
         for i in 0..n {
             all_pks.push(states[i].my_public_key().unwrap());
+            all_pops.push(states[i].my_pop().unwrap());
             all_vss.push(states[i].my_vss_public().unwrap());
         }
 
@@ -565,7 +567,7 @@ mod tests {
                         commitments: all_vss[i].commitments.clone(),
                     };
                     states[j]
-                        .process_participant_commit(i as u16 + 1, all_pks[i].clone(), vss)
+                        .process_participant_commit(i as u16 + 1, all_pks[i].clone(), all_pops[i].clone(), vss)
                         .unwrap();
                 }
             }
