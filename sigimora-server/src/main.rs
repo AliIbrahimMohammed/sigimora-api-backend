@@ -273,6 +273,8 @@ fn build_router(
         )
         // Signing
         .route("/api/v1/networks/{id}/sign", post(routes::signing::sign_message))
+        // Batch signing
+        .route("/api/v1/networks/{id}/batch-sign", post(routes::batch::batch_sign))
         // Verify
         .route("/api/v1/networks/{id}/verify", post(routes::verify::verify_signature))
         // Trace

@@ -67,6 +67,32 @@ pub struct SignResponse {
     pub message_hash_hex: String,
 }
 
+/// Batch signing — sign multiple messages in one request.
+#[derive(Debug, Deserialize)]
+pub struct BatchSignRequest {
+    /// Hex-encoded messages to sign (all signed by the same quorum).
+    pub messages: Vec<String>,
+    /// Which nodes should sign (same quorum for all messages).
+    pub quorum: Vec<u16>,
+}
+
+/// One signed message in a batch response.
+#[derive(Debug, Serialize)]
+pub struct BatchSignEntry {
+    pub message_hex: String,
+    pub tx_id: String,
+    pub combined_sig_hex: String,
+    pub message_hash_hex: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchSignResponse {
+    pub network_id: String,
+    pub quorum: Vec<u16>,
+    pub count: usize,
+    pub signatures: Vec<BatchSignEntry>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct VerifyRequest {
     pub message: String,                     // hex-encoded original message
