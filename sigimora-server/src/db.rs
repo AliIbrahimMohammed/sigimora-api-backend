@@ -111,6 +111,17 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_signed_txs_network ON signed_txs(network_id);"
         ).execute(&self.pool).await?;
 
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                actor       TEXT NOT NULL,
+                target      TEXT NOT NULL,
+                details     TEXT NOT NULL
+            );"
+        ).execute(&self.pool).await?;
+
         Ok(())
     }
 
@@ -175,6 +186,14 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub async fn delete_api_key(&self, id: &str) -> Result<bool, ApiError> {
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn touch_api_key(&self, id: &str) -> Result<(), ApiError> {
@@ -375,7 +394,7 @@ impl Database {
 //  Database row types (internal, mapped to SQLite columns)
 // ══════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct ApiKeyRow {
     pub id: String,
     pub key_hash: String,
@@ -386,7 +405,7 @@ pub struct ApiKeyRow {
     pub last_used_at: Option<String>,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct NetworkRow {
     pub id: String,
     pub n: i64,

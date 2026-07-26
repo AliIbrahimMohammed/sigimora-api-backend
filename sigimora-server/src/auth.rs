@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::db::{ApiKeyRow, Database};
 use crate::error::ApiError;
+use crate::state::AppState;
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ pub struct AuthenticatedUser {
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
-    Database: FromRef<S>,
+    Database: AxumFromRef<S>,
 {
     type Rejection = Response;
 
@@ -143,16 +144,17 @@ where
     }
 }
 
-/// Helper to extract the `Database` from an Axum state reference.
-pub trait FromRef<T> {
-    fn from_ref(state: &T) -> Database;
-}
+use axum::extract::FromRef as AxumFromRef;
 
-impl FromRef<crate::state::AppState> for Database {
-    fn from_ref(state: &crate::state::AppState) -> Database {
+// Allow extracting Database from AppState state (used by AuthenticatedUser extractor)
+impl AxumFromRef<AppState> for Database {
+    fn from_ref(state: &AppState) -> Self {
         state.db.clone()
     }
 }
+
+// AppState: Clone, so axum::extract::FromRef<T> for T is already provided by axum_core.
+// No need to implement it manually.
 
 #[cfg(test)]
 mod tests {

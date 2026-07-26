@@ -5,6 +5,25 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+/// Machine-readable error codes for API responses.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum ErrorCode {
+    NotFound,
+    BadRequest,
+    Unauthorized,
+    InternalError,
+    DatabaseError,
+    CryptoError,
+    RateLimited,
+    NetworkNotReady,
+    InvalidSignature,
+    InvalidKey,
+    NetworkNotFound,
+    KeyNotFound,
+    NodeNotFound,
+    TxNotFound,
+}
+
 /// Top-level API error.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -25,6 +44,20 @@ pub enum ApiError {
 
     #[error("crypto error: {0}")]
     Crypto(String),
+}
+
+impl ApiError {
+    /// Map this error to a machine-readable error code.
+    pub fn code(&self) -> ErrorCode {
+        match &self {
+            ApiError::NotFound(_) => ErrorCode::NotFound,
+            ApiError::BadRequest(_) => ErrorCode::BadRequest,
+            ApiError::Unauthorized(_) => ErrorCode::Unauthorized,
+            ApiError::Internal(_) => ErrorCode::InternalError,
+            ApiError::Database(_) => ErrorCode::DatabaseError,
+            ApiError::Crypto(_) => ErrorCode::CryptoError,
+        }
+    }
 }
 
 // Allow converting various error types into ApiError.
@@ -60,6 +93,7 @@ impl IntoResponse for ApiError {
         let body = json!({
             "error": self.to_string(),
             "message": message,
+            "code": self.code(),
         });
 
         (status, Json(body)).into_response()

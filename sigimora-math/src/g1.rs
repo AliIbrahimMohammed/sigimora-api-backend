@@ -68,6 +68,9 @@ impl Eq for G1Point {}
 
 // ── Constructors ─────────────────────────────────────────────────────
 impl G1Point {
+    /// Number of bytes for compressed G1 point (48 bytes for BLS12-381).
+    pub const BYTE_SIZE: usize = 48;
+
     /// The standard generator g₁ ∈ G₁ of BLS12-381.
     pub fn generator() -> Self {
         G1Point(G1Projective::generator())

@@ -15,18 +15,18 @@
 //! All settings are via environment variables or `.env` file:
 //!
 //! ```text
-//! SIGIMORA_LISTEN             — TCP address (default: 0.0.0.0:8080)
-//! SIGIMORA_DATA_DIR           — Data directory (default: ./data)
-//! SIGIMORA_DATABASE_URL       — Full SQLite URL (overrides DATA_DIR)
-//! SIGIMORA_LOG_LEVEL          — Log level (default: info)
-//! SIGIMORA_BOOTSTRAP_KEYS     — Comma-separated bootstrap API keys
-//! SIGIMORA_CORS_ENABLED       — Enable CORS (default: true)
-//! SIGIMORA_MAX_BODY           — Max request body bytes (default: 10MiB)
-//! SIGIMORA_MAX_MSG_BYTES      — Max hex message length (default: 1MiB)
-//! SIGIMORA_RATE_LIMIT         — Requests/min per IP (default: 60)
-//! SIGIMORA_TLS_ENABLED        — Enable TLS (default: false)
-//! SIGIMORA_TLS_CERT           — Path to TLS cert PEM
-//! SIGIMORA_TLS_KEY            — Path to TLS key PEM
+//! SIGIMORA_LISTEN               — TCP address (default: 0.0.0.0:8080)
+//! SIGIMORA_DATA_DIR             — Data directory (default: ./data)
+//! SIGIMORA_DATABASE_URL         — Full SQLite URL (overrides DATA_DIR)
+//! SIGIMORA_LOG_LEVEL            — Log level (default: info)
+//! SIGIMORA_BOOTSTRAP_KEYS       — Comma-separated bootstrap API keys
+//! SIGIMORA_CORS_ENABLED         — Enable CORS (default: true)
+//! SIGIMORA_CORS_ORIGINS         — Comma-separated allowed origins (default: *)
+//! SIGIMORA_MAX_BODY             — Max request body bytes (default: 10MiB)
+//! SIGIMORA_RATE_LIMIT           — Requests/min per IP (default: 60)
+//! SIGIMORA_TLS_ENABLED          — Enable TLS (default: false)
+//! SIGIMORA_TLS_CERT             — Path to TLS cert PEM
+//! SIGIMORA_TLS_KEY              — Path to TLS key PEM
 //! ```
 //!
 //! ## API Overview
@@ -48,27 +48,32 @@
 //! GET    /api/v1/networks/:id/nodes/:nid → Node details
 //! POST   /api/v1/api-keys                → Create API key (admin)
 //! GET    /api/v1/api-keys                → List API keys (admin)
+//! DELETE /api/v1/api-keys/:id            → Revoke API key (admin)
 //! ```
 
+mod audit;
+mod auth;
 mod config;
+mod db;
 mod error;
 mod models;
-mod db;
-mod auth;
-mod state;
 mod routes;
+mod state;
 
-use axum::routing::{get, post};
+use axum::extract::State;
+use axum::http::HeaderValue;
+use axum::middleware;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
 use axum::Router;
 use std::net::SocketAddr;
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
-
-use axum::http::HeaderValue;
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
@@ -78,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::from_env();
     config.ensure_dirs()?;
 
-    // Setup logging
+    // ── Setup logging ──────────────────────────────────────────────────
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -89,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("SIGIMORA Server v{} starting...", env!("CARGO_PKG_VERSION"));
 
-    // Open database
+    // ── Open database ───────────────────────────────────────────────────
     let database_url = config.database_url();
     tracing::info!("Database: {}", database_url);
     let db = crate::db::Database::open(&database_url).await?;
@@ -103,10 +108,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build router
     let app = build_router(state, &config)?;
 
-    // Start listening
+    // ── Start listening ─────────────────────────────────────────────────
     let addr: SocketAddr = config.listen_addr.parse()?;
-    tracing::info!("Listening on http://{}", addr);
 
+    if config.tls_enabled {
+        tracing::warn!(
+            "TLS is configured but full TLS listener not yet implemented. \
+             Falling back to HTTP. Set SIGIMORA_TLS_ENABLED=false to silence this warning."
+        );
+    }
+    tracing::info!("Listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -141,7 +152,10 @@ async fn shutdown_signal() {
 }
 
 /// Ensure at least one bootstrap admin API key exists.
-async fn ensure_bootstrap_key(db: &crate::db::Database, config: &ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+async fn ensure_bootstrap_key(
+    db: &crate::db::Database,
+    config: &ServerConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Check if any keys exist
     let keys = db.list_api_keys().await?;
     if keys.is_empty() {
@@ -149,22 +163,10 @@ async fn ensure_bootstrap_key(db: &crate::db::Database, config: &ServerConfig) -
         let (raw_key, row) = crate::auth::generate_api_key("bootstrap-admin", "admin");
         db.insert_api_key(&row).await?;
 
-        println!();
-        println!("╔══════════════════════════════════════════════════════════════╗");
-        println!("║  🚀 SIGIMORA Server                                        ║");
-        println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║                                                             ");
-        println!("║  First run detected — bootstrap API key created:            ");
-        println!("║                                                             ");
-        println!("║    {}", &raw_key);
-        println!("║                                                             ");
-        println!("║  Save this key! It will not be shown again.                 ");
-        println!("║                                                             ");
-        println!("║  Use it in the Authorization header:                        ");
-        println!("║    Authorization: Bearer {}", &raw_key);
-        println!("║                                                             ");
-        println!("╚══════════════════════════════════════════════════════════════╝");
-        println!();
+        tracing::info!(
+            "First run — bootstrap API key created: {}. Save this key! It will not be shown again.",
+            &raw_key
+        );
     }
 
     // Also register any bootstrap keys from env
@@ -187,14 +189,55 @@ async fn ensure_bootstrap_key(db: &crate::db::Database, config: &ServerConfig) -
     Ok(())
 }
 
+/// Rate limiting middleware — check against AppState per IP.
+async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> impl axum::response::IntoResponse {
+    let ip = req
+        .extensions()
+        .get::<std::net::SocketAddr>()
+        .map(|addr| addr.ip())
+        .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+
+    if !state.rate_limiter.check(ip).await {
+        tracing::warn!("Rate limit exceeded for IP: {}", ip);
+        let body = axum::Json(serde_json::json!({
+            "error": "rate limit exceeded",
+            "message": "Too many requests. Please slow down and try again."
+        }));
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            body,
+        )
+            .into_response();
+    }
+
+    next.run(req).await
+}
+
 /// Build the Axum router with all routes and middleware layers.
-fn build_router(state: AppState, config: &ServerConfig) -> Result<Router, Box<dyn std::error::Error>> {
+fn build_router(
+    state: AppState,
+    config: &ServerConfig,
+) -> Result<Router, Box<dyn std::error::Error>> {
     // ── CORS layer ──────────────────────────────────────────────────────
     let cors = if config.cors_enabled {
-        CorsLayer::new()
-            .allow_origin(Any)
+        let cors_layer = CorsLayer::new()
             .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_headers(Any);
+
+        if config.cors_allowed_origins.is_empty() {
+            cors_layer.allow_origin(Any)
+        } else {
+            let origins: Vec<HeaderValue> = config
+                .cors_allowed_origins
+                .iter()
+                .filter_map(|o| o.parse::<HeaderValue>().ok())
+                .collect();
+            cors_layer.allow_origin(origins)
+        }
     } else {
         CorsLayer::new() // restrictive default
     };
@@ -204,6 +247,9 @@ fn build_router(state: AppState, config: &ServerConfig) -> Result<Router, Box<dy
         axum::http::HeaderName::from_static("x-content-type-options"),
         HeaderValue::from_static("nosniff"),
     );
+
+    // ── Request body limit ──────────────────────────────────────────────
+    let body_limit = RequestBodyLimitLayer::new(config.max_body_size);
 
     // ── Middleware stack ─────────────────────────────────────────────────
     let middleware = ServiceBuilder::new()
@@ -215,10 +261,16 @@ fn build_router(state: AppState, config: &ServerConfig) -> Result<Router, Box<dy
         // Health (no auth required)
         .route("/api/v1/health", get(routes::health::health_check))
         // Networks
-        .route("/api/v1/networks", post(routes::network::create_network).get(routes::network::list_networks))
+        .route(
+            "/api/v1/networks",
+            post(routes::network::create_network).get(routes::network::list_networks),
+        )
         .route("/api/v1/networks/{id}", get(routes::network::get_network))
         // DKG
-        .route("/api/v1/networks/{id}/dkg", post(routes::dkg::run_dkg).get(routes::dkg::get_dkg_status))
+        .route(
+            "/api/v1/networks/{id}/dkg",
+            post(routes::dkg::run_dkg).get(routes::dkg::get_dkg_status),
+        )
         // Signing
         .route("/api/v1/networks/{id}/sign", post(routes::signing::sign_message))
         // Verify
@@ -231,12 +283,29 @@ fn build_router(state: AppState, config: &ServerConfig) -> Result<Router, Box<dy
         .route("/api/v1/networks/{id}/ledger", get(routes::ledger::get_ledger))
         // Nodes
         .route("/api/v1/networks/{id}/nodes", get(routes::identity::list_nodes))
-        .route("/api/v1/networks/{id}/nodes/{node_id}", get(routes::identity::get_node))
+        .route(
+            "/api/v1/networks/{id}/nodes/{node_id}",
+            get(routes::identity::get_node),
+        )
         // API Keys (admin)
-        .route("/api/v1/api-keys", post(routes::api_keys::create_api_key).get(routes::api_keys::list_api_keys))
-        // Layers
+        .route(
+            "/api/v1/api-keys",
+            post(routes::api_keys::create_api_key).get(routes::api_keys::list_api_keys),
+        )
+        .route(
+            "/api/v1/api-keys/{id}",
+            delete(routes::api_keys::delete_api_key),
+        )
+        // Layer: rate limiting applied to all routes except health
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .layer(middleware)
+        .layer(body_limit)
         .with_state(state);
 
     Ok(router)
 }
+
+

@@ -13,6 +13,7 @@ use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
 use crate::models::*;
 use crate::state::AppState;
+use sigimora_math::{G1Point, G2Point, Scalar};
 
 /// POST /api/v1/networks/:id/sign — threshold-sign a message.
 pub async fn sign_message(
@@ -64,12 +65,12 @@ pub async fn sign_message(
     let collective_pk_bytes = net_row.collective_pk.ok_or_else(|| {
         ApiError::BadRequest("collective PK not available — run DKG first".to_string())
     })?;
-    if collective_pk_bytes.len() != 96 {
+    if collective_pk_bytes.len() != G2Point::BYTE_SIZE {
         return Err(ApiError::Internal(
             format!("collective PK has invalid length {}", collective_pk_bytes.len()),
         ));
     }
-    let mut pk_arr = [0u8; 96];
+    let mut pk_arr = [0u8; G2Point::BYTE_SIZE];
     pk_arr.copy_from_slice(&collective_pk_bytes);
     let collective_pk = sigimora_math::G2Point::from_bytes(&pk_arr)
         .map_err(|_| ApiError::Crypto("invalid collective PK bytes".to_string()))?;
@@ -77,12 +78,12 @@ pub async fn sign_message(
     let tracking_pk_bytes = net_row.tracking_pk.ok_or_else(|| {
         ApiError::Internal("tracking PK missing".to_string())
     })?;
-    if tracking_pk_bytes.len() != 96 {
+    if tracking_pk_bytes.len() != G2Point::BYTE_SIZE {
         return Err(ApiError::Internal(
             format!("tracking PK has invalid length {}", tracking_pk_bytes.len()),
         ));
     }
-    let mut tp_arr = [0u8; 96];
+    let mut tp_arr = [0u8; G2Point::BYTE_SIZE];
     tp_arr.copy_from_slice(&tracking_pk_bytes);
     let tracking_pk = sigimora_math::G2Point::from_bytes(&tp_arr)
         .map_err(|_| ApiError::Crypto("invalid tracking PK bytes".to_string()))?;
@@ -94,12 +95,12 @@ pub async fn sign_message(
 
     for node_row in &node_rows {
         let node_id = node_row.node_id as u16;
-        if node_row.public_key.len() != 96 {
+        if node_row.public_key.len() != G2Point::BYTE_SIZE {
             return Err(ApiError::Internal(
                 format!("node {} PK has invalid length {}", node_id, node_row.public_key.len()),
             ));
         }
-        let mut pk_b = [0u8; 96];
+        let mut pk_b = [0u8; G2Point::BYTE_SIZE];
         pk_b.copy_from_slice(&node_row.public_key);
         let pk = sigimora_math::G2Point::from_bytes(&pk_b)
             .map_err(|_| ApiError::Crypto("invalid node PK".to_string()))?;
@@ -110,14 +111,14 @@ pub async fn sign_message(
         let _lt_pk = sigimora_math::G2Point::generator().mul(&lt_sk);
 
         // Decode the DKG secret from the stored node data
-        if node_row.secret_key.len() != 32 {
+        if node_row.secret_key.len() != Scalar::BYTE_SIZE {
             return Err(ApiError::Internal(format!(
                 "node {} secret key has invalid length {} (expected 32)",
                 node_row.node_id,
                 node_row.secret_key.len(),
             )));
         }
-        let mut sk_b = [0u8; 32];
+        let mut sk_b = [0u8; Scalar::BYTE_SIZE];
         sk_b.copy_from_slice(&node_row.secret_key);
         let dkg_share = sigimora_math::Scalar::from_bytes(&sk_b)
             .map_err(|_| ApiError::Crypto("invalid node secret key".to_string()))?;

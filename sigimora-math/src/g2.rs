@@ -54,6 +54,9 @@ impl Eq for G2Point {}
 
 // ── Constructors ─────────────────────────────────────────────────────
 impl G2Point {
+    /// Number of bytes for compressed G2 point (96 bytes for BLS12-381).
+    pub const BYTE_SIZE: usize = 96;
+
     /// The standard generator g₂ ∈ G₂ of BLS12-381.
     pub fn generator() -> Self {
         G2Point(G2Projective::generator())

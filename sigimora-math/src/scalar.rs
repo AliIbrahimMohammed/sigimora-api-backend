@@ -49,6 +49,11 @@ impl<'de> Deserialize<'de> for Scalar {
 // SECURITY: Manual Zeroize implementation for Scalar.
 // blstrs::Scalar wraps blst_fr which is a [u64; 4] internally.
 // We zero the memory by overwriting with the zero scalar.
+impl Scalar {
+    /// Number of bytes for serialized scalar (32 bytes for BLS12-381 scalar field).
+    pub const BYTE_SIZE: usize = 32;
+}
+
 impl Zeroize for Scalar {
     fn zeroize(&mut self) {
         unsafe {

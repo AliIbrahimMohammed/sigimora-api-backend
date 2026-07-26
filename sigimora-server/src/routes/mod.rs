@@ -1,12 +1,13 @@
 //! Route module aggregator.
 
-pub mod health;
-pub mod network;
-pub mod dkg;
-pub mod signing;
-pub mod verify;
-pub mod trace;
-pub mod refresh;
-pub mod ledger;
-pub mod identity;
 pub mod api_keys;
+pub mod dkg;
+pub mod extractor;
+pub mod health;
+pub mod identity;
+pub mod ledger;
+pub mod network;
+pub mod refresh;
+pub mod signing;
+pub mod trace;
+pub mod verify;

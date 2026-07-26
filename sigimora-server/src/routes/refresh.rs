@@ -7,6 +7,7 @@ use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
 use crate::models::*;
 use crate::state::AppState;
+use sigimora_math::Scalar;
 
 /// POST /api/v1/networks/:id/refresh — trigger proactive key refresh.
 pub async fn refresh_network(
@@ -43,14 +44,14 @@ pub async fn refresh_network(
     // Decode current secret keys (must be exactly 32 bytes)
     let mut current_keys: Vec<sigimora_math::Scalar> = Vec::new();
     for row in &node_rows {
-        if row.secret_key.len() != 32 {
+        if row.secret_key.len() != Scalar::BYTE_SIZE {
             return Err(ApiError::Internal(format!(
                 "node {} secret key has invalid length {}",
                 row.node_id,
                 row.secret_key.len(),
             )));
         }
-        let mut b = [0u8; 32];
+        let mut b = [0u8; Scalar::BYTE_SIZE];
         b.copy_from_slice(&row.secret_key);
         let sk = sigimora_math::Scalar::from_bytes(&b)
             .map_err(|_| ApiError::Crypto("invalid secret key".to_string()))?;

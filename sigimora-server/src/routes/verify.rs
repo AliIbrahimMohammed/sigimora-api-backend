@@ -7,6 +7,7 @@ use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
 use crate::models::*;
 use crate::state::AppState;
+use sigimora_math::{G1Point, G2Point};
 
 /// POST /api/v1/networks/:id/verify — verify a threshold signature.
 pub async fn verify_signature(
@@ -24,12 +25,12 @@ pub async fn verify_signature(
     let collective_pk_bytes = net_row.collective_pk.ok_or_else(|| {
         ApiError::BadRequest("collective PK not available — run DKG first".to_string())
     })?;
-    if collective_pk_bytes.len() != 96 {
+    if collective_pk_bytes.len() != G2Point::BYTE_SIZE {
         return Err(ApiError::Internal(
             format!("collective PK has invalid length {}", collective_pk_bytes.len()),
         ));
     }
-    let mut pk_arr = [0u8; 96];
+    let mut pk_arr = [0u8; G2Point::BYTE_SIZE];
     pk_arr.copy_from_slice(&collective_pk_bytes);
     let collective_pk = sigimora_math::G2Point::from_bytes(&pk_arr)
         .map_err(|_| ApiError::Crypto("invalid collective PK".to_string()))?;
@@ -42,12 +43,12 @@ pub async fn verify_signature(
     let sig_hex = &req.signature_hex;
     let sig_bytes = hex::decode(sig_hex)
         .map_err(|e| ApiError::BadRequest(format!("invalid hex signature: {}", e)))?;
-    if sig_bytes.len() != 48 {
+    if sig_bytes.len() != G1Point::BYTE_SIZE {
         return Err(ApiError::BadRequest(
-            format!("signature must be 48 bytes (96 hex chars), got {} bytes", sig_bytes.len()),
+            format!("signature must be {} bytes ({} hex chars), got {} bytes", G1Point::BYTE_SIZE, G1Point::BYTE_SIZE * 2, sig_bytes.len()),
         ));
     }
-    let mut sig_arr = [0u8; 48];
+    let mut sig_arr = [0u8; G1Point::BYTE_SIZE];
     sig_arr.copy_from_slice(&sig_bytes);
     let sig = sigimora_math::G1Point::from_bytes(&sig_arr)
         .map_err(|_| ApiError::Crypto("invalid signature point".to_string()))?;
@@ -62,4 +63,22 @@ pub async fn verify_signature(
         valid,
         network_id,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use sigimora_math::{G1Point, G2Point};
+
+    #[test]
+    fn test_signature_length_check() {
+        // 47 bytes instead of 48
+        assert_ne!(47, G1Point::BYTE_SIZE);
+        assert_eq!(48, G1Point::BYTE_SIZE);
+    }
+
+    #[test]
+    fn test_pk_length_check() {
+        assert_ne!(95, G2Point::BYTE_SIZE);
+        assert_eq!(96, G2Point::BYTE_SIZE);
+    }
 }

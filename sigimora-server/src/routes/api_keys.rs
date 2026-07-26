@@ -1,6 +1,6 @@
 //! API key management endpoints (admin only).
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 
 use crate::auth::AuthenticatedUser;
@@ -70,4 +70,27 @@ pub async fn list_api_keys(
         .collect();
 
     Ok(Json(keys))
+}
+
+/// DELETE /api/v1/api-keys/:id — revoke (delete) an API key.
+pub async fn delete_api_key(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if user.role != "admin" {
+        return Err(ApiError::Unauthorized(
+            "only admins can delete API keys".to_string(),
+        ));
+    }
+
+    let deleted = state.db.delete_api_key(&id).await?;
+    if !deleted {
+        return Err(ApiError::NotFound(format!("api key {} not found", id)));
+    }
+
+    // Audit
+    crate::audit::audit("api_key.delete", &user.id, &id, "API key revoked");
+
+    Ok(Json(serde_json::json!({ "deleted": true })))
 }
