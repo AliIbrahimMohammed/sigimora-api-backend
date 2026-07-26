@@ -12,4 +12,7 @@ target/
 Cargo.lock
 test_*_data/
 test_data/
+test_run/
 data/
+*.pyc
+__pycache__/
