@@ -4,7 +4,8 @@
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-137%20passed-brightgreen.svg)](#test-results)
+[![CI](https://github.com/AliIbrahimMohammed/sigimora-api-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/AliIbrahimMohammed/sigimora-api-backend/actions)
+[![Tests](https://img.shields.io/badge/tests-113%20passed-brightgreen.svg)](#test-results)
 
 ---
 
@@ -23,13 +24,13 @@ SIGIMORA API is a production-ready REST backend for **BFT Accountable Threshold 
 | 🔄 **Proactive Refresh** | Zero-polynomial key rotation — new shares, same collective key |
 | 📋 **Immutable Ledger** | Append-only record of all signed transactions |
 | 🔑 **API Key Auth** | SHA-256 hashed bearer tokens with constant-time comparison |
-| 🛡️ **Security Hardened** | OsRng entropy, input validation, CORS control, TLS support, graceful shutdown |
+| 🛡️ **Security Hardened** | Rate limiting, body size limit, CORS allow-list, input validation, audit logging |
 
 ### Architecture
 
 ```
 sigimora-api/
-├── sigimora-server         Axum REST API (routes, auth, database, error handling)
+├── sigimora-server         Axum REST API (routes, auth, database, middleware, metrics)
 ├── sigimora-math           BLS12-381 primitives (Scalar, G1, G2, GT, pairing)
 ├── sigimora-crypto         BLS, Shamir SSS, Pedersen VSS, 5-stage DKG
 ├── sigimora-ats            Accountable Threshold Signatures + ECIES tracing
@@ -43,15 +44,15 @@ sigimora-api/
 
 ### Prerequisites
 
-- **Rust** 1.96+ (stable)
+- **Rust** 1.85+ (stable)
 - **C toolchain** (GCC/MinGW on Windows, GCC/Clang on Linux/macOS)
 
 ### Build & Run
 
 ```bash
 # Clone
-git clone https://github.com/AliIbrahimMohammed/sigimora-api.git
-cd sigimora-api
+git clone https://github.com/AliIbrahimMohammed/sigimora-api-backend.git
+cd sigimora-api-backend
 
 # Build the server
 cargo build --release -p sigimora-server
@@ -60,7 +61,13 @@ cargo build --release -p sigimora-server
 cargo run --release -p sigimora-server
 ```
 
-On first run, a **bootstrap admin API key** is printed to the console. **Save it** — it is your credential for all API calls.
+On first run, a **bootstrap admin API key** is logged in the console output. **Save it** — it is your credential for all API calls.
+
+### Docker
+
+```bash
+docker compose up --build
+```
 
 ### Verify
 
@@ -69,16 +76,16 @@ curl http://localhost:8080/api/v1/health
 ```
 
 ```json
-{"status":"ok","version":"0.1.0","uptime_seconds":5,"networks":0,"nodes":0,"ledger_entries":0,"crypto_backend":"BLS12-381 (blstrs/blst) + Pedersen DKG + ATS"}
+{"status":"ok","version":"1.1.0","uptime_seconds":5,"networks":0,"nodes":0,"ledger_entries":0,"crypto_backend":"BLS12-381 (blstrs/blst) + Pedersen DKG + ATS"}
 ```
 
-> The `/health` endpoint is the **only** unauthenticated endpoint.
+> The `/health` and `/metrics` endpoints are the **only** unauthenticated endpoints.
 
 ---
 
 ## Configuration
 
-All settings via environment variables or `.env` file:
+All settings via environment variables, `.env` file, or `sigimora.toml`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -88,23 +95,44 @@ All settings via environment variables or `.env` file:
 | `SIGIMORA_LOG_LEVEL` | `info` | Log level |
 | `SIGIMORA_BOOTSTRAP_KEYS` | *(empty)* | Comma-separated pre-approved admin API keys |
 | `SIGIMORA_CORS_ENABLED` | `true` | Enable CORS |
-| `SIGIMORA_MAX_BODY` | `10485760` | Max request body (bytes) |
-| `SIGIMORA_MAX_MSG_BYTES` | `1048576` | Max hex message length (bytes) |
+| `SIGIMORA_CORS_ORIGINS` | *(any)* | Comma-separated allowed origins (empty = allow all) |
+| `SIGIMORA_MAX_BODY` | `10485760` | Max request body (bytes, 10 MiB) |
+| `SIGIMORA_MAX_MSG_BYTES` | `1048576` | Max hex message length (bytes, 1 MiB) |
 | `SIGIMORA_RATE_LIMIT` | `60` | Requests/min per IP (0 = disabled) |
 | `SIGIMORA_TLS_ENABLED` | `false` | Enable TLS |
 | `SIGIMORA_TLS_CERT` | *(none)* | Path to TLS certificate PEM |
 | `SIGIMORA_TLS_KEY` | *(none)* | Path to TLS private key PEM |
+| `SIGIMORA_CONFIG` | *(none)* | Path to TOML config file (default: `./sigimora.toml`) |
+
+### TOML Config File Example
+
+```toml
+# sigimora.toml
+listen = "0.0.0.0:8080"
+log_level = "debug"
+rate_limit = 120
+
+[cors]
+enabled = true
+origins = ["https://app.example.com", "https://admin.example.com"]
+
+[tls]
+enabled = true
+cert = "/etc/ssl/sigimora.crt"
+key = "/etc/ssl/sigimora.key"
+```
 
 ---
 
 ## API Reference
 
-All endpoints (except `/health`) require: `Authorization: Bearer <api-key>`
+All endpoints (except `/health` and `/metrics`) require: `Authorization: Bearer <api-key>`
 
-### Health
+### Health & Metrics
 
 ```
-GET /api/v1/health
+GET /api/v1/health    → Server status, version, uptime, counters
+GET /metrics          → Prometheus-compatible metrics
 ```
 
 ### Networks
@@ -162,9 +190,32 @@ GET  /api/v1/networks/:id/nodes/:nid    # Get node details
 ### API Key Management (admin only)
 
 ```
-POST /api/v1/api-keys   # Create API key (admin/user role)
-GET  /api/v1/api-keys   # List API keys
+POST /api/v1/api-keys       # Create API key (admin/user role)
+GET  /api/v1/api-keys       # List API keys
+DELETE /api/v1/api-keys/:id  # Revoke API key
 ```
+
+### Error Responses
+
+All errors return a JSON body with machine-readable error codes:
+
+```json
+{
+  "error": "bad request: n must be >= 2",
+  "message": "n must be >= 2",
+  "code": "BadRequest"
+}
+```
+
+| HTTP Status | Error Code | Meaning |
+|---|---|---|
+| 400 | `BadRequest` | Invalid input |
+| 400 | `CryptoError` | Cryptographic operation failed |
+| 401 | `Unauthorized` | Invalid or missing API key |
+| 404 | `NotFound` | Resource does not exist |
+| 429 | `RateLimited` | Too many requests from this IP |
+| 500 | `InternalError` | Unexpected server error |
+| 500 | `DatabaseError` | Database operation failed |
 
 ---
 
@@ -222,66 +273,72 @@ curl -X POST "http://localhost:8080/api/v1/networks/$NET_ID/sign" \
 # 9. View ledger
 curl "http://localhost:8080/api/v1/networks/$NET_ID/ledger" \
   -H "Authorization: Bearer $NET_KEY"
+
+# 10. Create a user API key (admin only)
+curl -X POST "http://localhost:8080/api/v1/api-keys" \
+  -H "Authorization: Bearer $NET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "my-app", "role": "user"}'
+
+# 11. Revoke an API key (admin only)
+curl -X DELETE "http://localhost:8080/api/v1/api-keys/<key-id>" \
+  -H "Authorization: Bearer $NET_KEY"
 ```
 
 ---
 
-## Integration Test
+## Test Suite
 
-A comprehensive Python integration test is available at `scripts/integration_test.py`:
-
-```bash
-# Install dependencies
-pip install requests
-
-# Start the server in one terminal
-cargo run -p sigimora-server
-
-# Run the integration test in another
-python scripts/integration_test.py
-```
-
-The test covers all 16 endpoints including:
-- Health, Create/List/Get Network, DKG, Sign (valid + error), Verify (valid + wrong sig + wrong msg)
-- Trace (valid + unknown tx 404 + invalid hex 400)
-- Ledger (entries + pagination)
-- Refresh (predkg rejection + invariant preserved)
-- Nodes (list + get + unknown 404)
-- API Keys (create admin/user + RBAC)
-- Auth (no auth 401, short key 401, wrong key 401, malformed Bearer 401, SQL injection 401, long key 401)
-
----
-
-## Development
-
-### Running Tests
+### Rust Tests (113 total, 0 failures)
 
 ```bash
 # All tests
 cargo test --workspace
 
-# Server tests only
-cargo test -p sigimora-server
+# Property-based tests only
+cargo test -p sigimora-math --test proptest_tests
 ```
-
-**137+ tests, 0 failures** across all crates:
 
 | Crate | Tests | Domain |
 |---|---|---|
-| sigimora-math | 47 | Scalar, G1, G2, GT, pairing, hash-to-curve |
+| sigimora-math | 47 + 12 proptest | Scalar, G1, G2, GT, pairing, hash-to-curve |
 | sigimora-crypto | 26 | BLS, Shamir, Pedersen VSS/DKG, FROST |
 | sigimora-ats | 8 | Sign/verify, tracing, quorum independence |
 | sigimora-refresh | 5 | Zero-poly, collective key invariant |
 | sigimora-mcp | 3 | Protocol lifecycle, state transitions |
-| sigimora-server | 10 | Auth (7) + Config (3) |
+| sigimora-server | 12 | Auth (7), Config (3), Negative (2) |
 
-### Building
+### Fuzz Targets
 
 ```bash
-cargo build --workspace
+# Install cargo-fuzz
+cargo install cargo-fuzz
+
+# Run fuzzers
+cargo fuzz run fuzz_scalar_deserialize
+cargo fuzz run fuzz_g1_deserialize
+cargo fuzz run fuzz_g2_deserialize
+cargo fuzz run fuzz_hex_decode
 ```
 
-**0 errors, 0 warnings.**
+### Python Integration Tests
+
+```bash
+pip install requests
+
+# Start the server
+cargo run -p sigimora-server
+
+# Run integration test (37 checks)
+python scripts/integration_test.py
+
+# Run status code verification (64 checks)
+python scripts/test_all_200.py
+python scripts/test_error_codes.py
+
+# Run rigorous crypto verification (54 checks)
+python scripts/verify_crypto.py
+```
 
 ---
 
@@ -289,8 +346,8 @@ cargo build --workspace
 
 ```
 1. CREATE   → Network creator generates tracking key pair + config (n, t)
-2. DKG      → All n nodes run 5-stage Pedersen DKG
-              → Collective public key + per-node secret shares
+2. DKG      → All n nodes run 5-stage Pedersen DKG (parallelized)
+               → Collective public key + per-node secret shares
 3. SIGN     → t+1 nodes create partial BLS signatures + ECIES ATS tags
 4. COMBINE  → Aggregate via Lagrange: σ = Σ λⱼ·σⱼ
 5. VERIFY   → Anyone checks: e(σ, g₂) == e(H(m), PK)
@@ -302,13 +359,29 @@ cargo build --workspace
 
 ## Security
 
-- **API Keys**: SHA-256 hashed, `subtle::ConstantTimeEq` comparison, OsRng entropy
-- **Input Validation**: Length, hex format, and range checks on all parameters
+### Authentication
+- **API Keys**: 128-bit random entropy, SHA-256 hashed for storage
+- **Constant-Time Comparison**: `subtle::ConstantTimeEq` prevents timing attacks
+- **RFC 7235 Bearer**: Accepts `Bearer`, `bearer`, and `BEARER` prefixes
+- **Rate Limiting**: Sliding-window per-IP limiter (configurable via `SIGIMORA_RATE_LIMIT`)
+
+### Input Validation
+- **Request Body Limit**: Capped at `SIGIMORA_MAX_BODY` (default 10 MiB)
+- **Length Guards**: All `copy_from_slice()` calls validated (G1: 48B, G2: 96B, Scalar: 32B)
+- **Hex Format**: Strict hex decoding with descriptive error messages
+- **CORS**: Configurable origin allow-list via `SIGIMORA_CORS_ORIGINS`
+
+### Data Protection
 - **Headers**: `X-Content-Type-Options: nosniff` on all responses
-- **CORS**: Configurable via `SIGIMORA_CORS_ENABLED`
-- **TLS**: Optional HTTPS with PEM certificates
-- **Shutdown**: Graceful SIGINT/SIGTERM handler
-- **Dependencies**: Minimal and audited
+- **Secrets**: Secret keys zeroized on drop (`Zeroize` + `ZeroizeOnDrop`)
+- **Audit Logging**: All security-relevant operations logged as structured JSON
+- **TLS**: Optional HTTPS (configured, full listener support upcoming)
+
+### Operations
+- **Graceful Shutdown**: SIGINT/SIGTERM handler drains in-flight requests
+- **Caching**: 30-second TTL on network lookups (reduces SQLite read pressure)
+- **DKG Parallelization**: CPU-intensive crypto runs on `spawn_blocking` thread pool
+- **Metrics**: Prometheus-compatible `/metrics` endpoint for monitoring
 
 ---
 
@@ -317,7 +390,6 @@ cargo build --workspace
 **Ali Ibrahim Mohamed Al Gamal**
 - Email: wekaali4335@gmail.com
 - GitHub: https://github.com/AliIbrahimMohammed
-- LinkedIn: https://www.linkedin.com/in/0xali-ibrahim/
 
 ## License
 
