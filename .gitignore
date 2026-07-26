@@ -1,0 +1,15 @@
+target/
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+.DS_Store
+.env
+*.swp
+*.swo
+*~
+Cargo.lock
+test_*_data/
+test_data/
+data/

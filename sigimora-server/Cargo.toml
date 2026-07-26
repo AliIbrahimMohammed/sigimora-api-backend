@@ -1,0 +1,61 @@
+[package]
+name = "sigimora-server"
+version = "0.1.0"
+description = "SIGIMORA REST API — BFT Accountable Threshold Signing Backend"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AliIbrahimMohammed/sigimora-api"
+
+[dependencies]
+# ——— SIGIMORA crypto core (local workspace) ———
+sigimora-math = { path = "../sigimora-math" }
+sigimora-crypto = { path = "../sigimora-crypto" }
+sigimora-ats = { path = "../sigimora-ats" }
+sigimora-refresh = { path = "../sigimora-refresh" }
+sigimora-mcp = { path = "../sigimora-mcp" }
+
+# ——— Web framework ———
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "set-header"] }
+tokio = { workspace = true, features = ["full"] }
+
+# ——— Serialization ———
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# ——— Database ———
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# ——— Auth / Security ———
+rand = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+
+# ——— .env support ———
+dotenvy = "0.15"
+
+# ——— Logging ———
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# —── Error handling ———
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# ——— Time ———
+chrono = { version = "0.4", features = ["serde"] }
+
+# ——— Async helpers ———
+futures = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tracing-test = "0.2"
+tempfile = "3"
+
+[[bin]]
+name = "sigimora-server"
+path = "src/main.rs"

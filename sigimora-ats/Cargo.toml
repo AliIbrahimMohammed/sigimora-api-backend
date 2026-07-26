@@ -1,0 +1,18 @@
+[package]
+name = "sigimora-ats"
+description = "Accountable Threshold Signatures for SIGIMORA"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+sigimora-math = { path = "../sigimora-math" }
+sigimora-crypto = { path = "../sigimora-crypto" }
+serde = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+aes-gcm = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+rand_core = { workspace = true }

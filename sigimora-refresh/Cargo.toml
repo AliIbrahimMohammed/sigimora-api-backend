@@ -1,0 +1,17 @@
+[package]
+name = "sigimora-refresh"
+description = "Proactive Refresh protocol for SIGIMORA threshold shares"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+sigimora-math = { path = "../sigimora-math" }
+sigimora-crypto = { path = "../sigimora-crypto" }
+serde = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+aes-gcm = { workspace = true }
+sha2 = { workspace = true }
