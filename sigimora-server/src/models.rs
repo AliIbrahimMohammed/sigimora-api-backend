@@ -180,7 +180,7 @@ pub struct NodeInfo {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Health
+//  Health v2
 // ══════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Serialize)]
@@ -188,9 +188,13 @@ pub struct HealthResponse {
     pub status: String,                      // "ok"
     pub version: String,
     pub uptime_seconds: u64,
+    pub uptime_human: String,                // e.g. "2d 3h 15m 42s"
     pub networks: usize,
     pub nodes: usize,
     pub ledger_entries: usize,
+    pub api_keys: usize,
+    pub db_status: String,                   // "connected" | "error"
+    pub cache_age_secs: Option<u64>,         // age of in-memory network cache
     pub crypto_backend: String,
 }
 
@@ -218,6 +222,26 @@ pub struct ApiKeyInfo {
 pub struct CreateApiKeyResponse {
     pub api_key: ApiKeyInfo,
     pub raw_key: String,                    // full key, only shown once
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  Paginated responses
+// ══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedNodesResponse {
+    pub nodes: Vec<NodeInfo>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedApiKeysResponse {
+    pub api_keys: Vec<ApiKeyInfo>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
 }
 
 // ══════════════════════════════════════════════════════════════════════════

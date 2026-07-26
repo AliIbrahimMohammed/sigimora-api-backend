@@ -1,6 +1,6 @@
 //! API key management endpoints (admin only).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 
 use crate::auth::AuthenticatedUser;
@@ -41,16 +41,20 @@ pub async fn create_api_key(
     }))
 }
 
-/// GET /api/v1/api-keys — list all API keys.
+/// GET /api/v1/api-keys — list all API keys (with pagination).
 pub async fn list_api_keys(
     State(state): State<AppState>,
     user: AuthenticatedUser,
-) -> Result<Json<Vec<ApiKeyInfo>>, ApiError> {
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedApiKeysResponse>, ApiError> {
     if user.role != "admin" {
         return Err(ApiError::Unauthorized("only admins can list API keys".to_string()));
     }
 
-    let rows = state.db.list_api_keys().await?;
+    let offset = pagination.offset();
+    let limit = pagination.limit();
+    let total = state.db.count_api_keys().await?;
+    let rows = state.db.list_api_keys_paginated(offset, limit).await?;
     let keys: Vec<ApiKeyInfo> = rows
         .iter()
         .map(|r| ApiKeyInfo {
@@ -69,7 +73,7 @@ pub async fn list_api_keys(
         })
         .collect();
 
-    Ok(Json(keys))
+    Ok(Json(PaginatedApiKeysResponse { api_keys: keys, total, offset, limit }))
 }
 
 /// DELETE /api/v1/api-keys/:id — revoke (delete) an API key.

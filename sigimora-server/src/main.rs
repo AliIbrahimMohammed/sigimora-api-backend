@@ -61,9 +61,9 @@ mod routes;
 mod state;
 
 use axum::extract::State;
-use axum::http::HeaderValue;
+use axum::http::{HeaderName, HeaderValue};
 use axum::middleware;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::net::SocketAddr;
@@ -73,24 +73,83 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
+
+// ── Request ID middleware ─────────────────────────────────────────────────
+
+/// Middleware that ensures every request has an `X-Request-ID`.
+///
+/// If the client sends one, it is preserved; otherwise a new UUID v4 is
+/// generated.  The ID is:
+///   - inserted into the request extensions so handlers can retrieve it
+///   - set on the `X-Request-ID` response header
+///   - stored in the `REQUEST_ID` task-local so error responses include it
+async fn request_id_middleware(
+    mut req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    req.extensions_mut().insert(id.clone());
+
+    let res = crate::error::REQUEST_ID
+        .scope(id.clone(), async move {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(
+                HeaderName::from_static("x-request-id"),
+                HeaderValue::from_str(&id).unwrap(),
+            );
+            res
+        })
+        .await;
+
+    res
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::from_env();
     config.ensure_dirs()?;
 
-    // ── Setup logging ──────────────────────────────────────────────────
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
-        )
-        .with_target(true)
-        .init();
+    // ── Setup logging + OpenTelemetry ──────────────────────────────────
+    {
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_target(true);
+
+        let subscriber = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt_layer);
+
+        // If OTEL_EXPORTER_OTLP_ENDPOINT is set, add an OTLP tracing layer.
+        if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+            match init_otlp_tracer() {
+                Ok(tracer) => {
+                    let otel_layer = tracing_opentelemetry::layer()
+                        .with_tracer(tracer);
+                    subscriber.with(otel_layer).init();
+                    tracing::info!("OpenTelemetry OTLP tracing enabled");
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to init OTLP tracer (falling back to stdout): {}", e);
+                    subscriber.init();
+                }
+            }
+        } else {
+            subscriber.init();
+        }
+    }
 
     tracing::info!("SIGIMORA Server v{} starting...", env!("CARGO_PKG_VERSION"));
 
@@ -126,6 +185,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Initialise an OTLP tracer using the `OTEL_EXPORTER_OTLP_ENDPOINT` env
+/// var (defaults to `http://localhost:4317`).
+fn init_otlp_tracer() -> Result<opentelemetry_sdk::trace::Tracer, Box<dyn std::error::Error>> {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::SpanExporter;
+
+    let exporter = SpanExporter::builder()
+        .with_http()
+        .build()?;
+
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter)
+        .build();
+
+    let tracer = provider.tracer("sigimora-server");
+    let _ = opentelemetry::global::set_tracer_provider(provider);
+    Ok(tracer)
+}
+
 /// Wait for SIGINT or SIGTERM to trigger graceful shutdown.
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -146,9 +224,14 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => { tracing::info!("Shutting down (SIGINT)..."); }
-        _ = terminate => { tracing::info!("Shutting down (SIGTERM)..."); }
+        _ = ctrl_c => {
+            tracing::info!("Shutting down (SIGINT)...");
+        }
+        _ = terminate => {
+            tracing::info!("Shutting down (SIGTERM)...");
+        }
     }
+    tracing::info!("Server stopped.");
 }
 
 /// Ensure at least one bootstrap admin API key exists.
@@ -203,9 +286,11 @@ async fn rate_limit_middleware(
 
     if !state.rate_limiter.check(ip).await {
         tracing::warn!("Rate limit exceeded for IP: {}", ip);
+        let request_id = crate::error::REQUEST_ID.try_with(|id| id.clone()).ok();
         let body = axum::Json(serde_json::json!({
             "error": "rate limit exceeded",
-            "message": "Too many requests. Please slow down and try again."
+            "code": "RateLimited",
+            "request_id": request_id,
         }));
         return (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
@@ -255,6 +340,7 @@ fn build_router(
     let middleware = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(axum::middleware::from_fn(request_id_middleware))
         .layer(security_headers);
 
     let router = Router::new()

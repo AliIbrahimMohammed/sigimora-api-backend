@@ -5,6 +5,12 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+tokio::task_local! {
+    /// Per-request ID set by the RequestId middleware.
+    /// Accessible from error responses and any handler in the same task.
+    pub static REQUEST_ID: String;
+}
+
 /// Machine-readable error codes for API responses.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum ErrorCode {
@@ -90,10 +96,13 @@ impl IntoResponse for ApiError {
             ApiError::Crypto(m) => (StatusCode::BAD_REQUEST, m.clone()),
         };
 
+        // Try to read per-request ID set by the RequestId middleware.
+        let request_id = REQUEST_ID.try_with(|id| id.clone()).ok();
+
         let body = json!({
-            "error": self.to_string(),
-            "message": message,
+            "error": message,
             "code": self.code(),
+            "request_id": request_id,
         });
 
         (status, Json(body)).into_response()

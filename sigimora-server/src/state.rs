@@ -79,4 +79,22 @@ impl AppState {
     pub fn next_request_id(&self) -> u64 {
         self.request_counter.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Return a human-readable uptime string.
+    pub fn uptime_human(&self) -> String {
+        let secs = self.start_time.elapsed().as_secs();
+        let days = secs / 86400;
+        let hours = (secs % 86400) / 3600;
+        let mins = (secs % 3600) / 60;
+        let secs = secs % 60;
+        if days > 0 {
+            format!("{}d {}h {}m {}s", days, hours, mins, secs)
+        } else if hours > 0 {
+            format!("{}h {}m {}s", hours, mins, secs)
+        } else if mins > 0 {
+            format!("{}m {}s", mins, secs)
+        } else {
+            format!("{}s", secs)
+        }
+    }
 }

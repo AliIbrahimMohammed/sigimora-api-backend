@@ -1,6 +1,6 @@
 //! Node identity / membership endpoints.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::Utc;
 
@@ -9,12 +9,13 @@ use crate::error::ApiError;
 use crate::models::*;
 use crate::state::AppState;
 
-/// GET /api/v1/networks/:id/nodes — list nodes in a network.
+/// GET /api/v1/networks/:id/nodes — list nodes in a network (with pagination).
 pub async fn list_nodes(
     State(state): State<AppState>,
     _user: AuthenticatedUser,
     Path(network_id): Path<String>,
-) -> Result<Json<Vec<NodeInfo>>, ApiError> {
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedNodesResponse>, ApiError> {
     // Verify network exists
     let _net = state
         .db
@@ -22,7 +23,10 @@ pub async fn list_nodes(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("network {} not found", network_id)))?;
 
-    let node_rows = state.db.get_nodes_by_network(&network_id).await?;
+    let offset = pagination.offset();
+    let limit = pagination.limit();
+    let total = state.db.count_nodes_by_network(&network_id).await?;
+    let node_rows = state.db.get_nodes_by_network_paginated(&network_id, offset, limit).await?;
     let nodes: Vec<NodeInfo> = node_rows
         .iter()
         .map(|r| NodeInfo {
@@ -41,7 +45,7 @@ pub async fn list_nodes(
         })
         .collect();
 
-    Ok(Json(nodes))
+    Ok(Json(PaginatedNodesResponse { nodes, total, offset, limit }))
 }
 
 /// GET /api/v1/networks/:id/nodes/:node_id — get a specific node.

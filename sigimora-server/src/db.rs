@@ -188,6 +188,26 @@ impl Database {
         Ok(rows)
     }
 
+    pub async fn list_api_keys_paginated(
+        &self, offset: usize, limit: usize,
+    ) -> Result<Vec<ApiKeyRow>, ApiError> {
+        let rows = sqlx::query_as::<_, ApiKeyRow>(
+            "SELECT id, key_hash, key_prefix, label, role, created_at, last_used_at FROM api_keys ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn count_api_keys(&self) -> Result<usize, ApiError> {
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count as usize)
+    }
+
     pub async fn delete_api_key(&self, id: &str) -> Result<bool, ApiError> {
         let result = sqlx::query("DELETE FROM api_keys WHERE id = ?")
             .bind(id)
@@ -283,6 +303,20 @@ impl Database {
             "SELECT id, node_id, network_id, public_key, secret_key, company_name, epoch, created_at FROM nodes WHERE network_id = ? ORDER BY node_id",
         )
         .bind(network_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_nodes_by_network_paginated(
+        &self, network_id: &str, offset: usize, limit: usize,
+    ) -> Result<Vec<NodeRow>, ApiError> {
+        let rows = sqlx::query_as::<_, NodeRow>(
+            "SELECT id, node_id, network_id, public_key, secret_key, company_name, epoch, created_at FROM nodes WHERE network_id = ? ORDER BY node_id LIMIT ? OFFSET ?",
+        )
+        .bind(network_id)
+        .bind(limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
