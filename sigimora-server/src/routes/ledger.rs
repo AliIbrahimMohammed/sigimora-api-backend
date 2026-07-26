@@ -16,6 +16,13 @@ pub async fn get_ledger(
     Path(network_id): Path<String>,
     Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<LedgerResponse>, ApiError> {
+    // Verify network exists
+    let _net = state
+        .db
+        .get_network(&network_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("network {} not found", network_id)))?;
+
     let rows = state
         .db
         .get_ledger_by_network(&network_id, pagination.offset(), pagination.limit())

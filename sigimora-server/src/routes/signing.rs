@@ -64,6 +64,11 @@ pub async fn sign_message(
     let collective_pk_bytes = net_row.collective_pk.ok_or_else(|| {
         ApiError::BadRequest("collective PK not available — run DKG first".to_string())
     })?;
+    if collective_pk_bytes.len() != 96 {
+        return Err(ApiError::Internal(
+            format!("collective PK has invalid length {}", collective_pk_bytes.len()),
+        ));
+    }
     let mut pk_arr = [0u8; 96];
     pk_arr.copy_from_slice(&collective_pk_bytes);
     let collective_pk = sigimora_math::G2Point::from_bytes(&pk_arr)
@@ -72,6 +77,11 @@ pub async fn sign_message(
     let tracking_pk_bytes = net_row.tracking_pk.ok_or_else(|| {
         ApiError::Internal("tracking PK missing".to_string())
     })?;
+    if tracking_pk_bytes.len() != 96 {
+        return Err(ApiError::Internal(
+            format!("tracking PK has invalid length {}", tracking_pk_bytes.len()),
+        ));
+    }
     let mut tp_arr = [0u8; 96];
     tp_arr.copy_from_slice(&tracking_pk_bytes);
     let tracking_pk = sigimora_math::G2Point::from_bytes(&tp_arr)
@@ -84,6 +94,11 @@ pub async fn sign_message(
 
     for node_row in &node_rows {
         let node_id = node_row.node_id as u16;
+        if node_row.public_key.len() != 96 {
+            return Err(ApiError::Internal(
+                format!("node {} PK has invalid length {}", node_id, node_row.public_key.len()),
+            ));
+        }
         let mut pk_b = [0u8; 96];
         pk_b.copy_from_slice(&node_row.public_key);
         let pk = sigimora_math::G2Point::from_bytes(&pk_b)

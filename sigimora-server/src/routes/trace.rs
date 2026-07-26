@@ -28,6 +28,11 @@ pub async fn trace_signers(
     let tracking_sk_hex = &req.tracking_key_hex;
     let sk_bytes = hex::decode(tracking_sk_hex)
         .map_err(|e| ApiError::BadRequest(format!("invalid tracking key hex: {}", e)))?;
+    if sk_bytes.len() != 32 {
+        return Err(ApiError::BadRequest(
+            format!("tracking key must be 32 bytes, got {}", sk_bytes.len()),
+        ));
+    }
     let mut sk_arr = [0u8; 32];
     sk_arr.copy_from_slice(&sk_bytes);
     let _tracking_sk = sigimora_math::Scalar::from_bytes(&sk_arr)
@@ -41,6 +46,11 @@ pub async fn trace_signers(
         .ok_or_else(|| ApiError::NotFound(format!("tx {} not found", req.tx_id)))?;
 
     // Reconstruct the ATS signature
+    if tx.signature.len() != 48 {
+        return Err(ApiError::Internal(
+            format!("stored signature has invalid length {}", tx.signature.len()),
+        ));
+    }
     let mut sig_arr = [0u8; 48];
     sig_arr.copy_from_slice(&tx.signature);
     let _combined_sig = sigimora_math::G1Point::from_bytes(&sig_arr)
@@ -50,6 +60,11 @@ pub async fn trace_signers(
     let collective_pk_bytes = net_row.collective_pk.ok_or_else(|| {
         ApiError::BadRequest("collective PK not available".to_string())
     })?;
+    if collective_pk_bytes.len() != 96 {
+        return Err(ApiError::Internal(
+            format!("collective PK has invalid length {}", collective_pk_bytes.len()),
+        ));
+    }
     let mut cpk_arr = [0u8; 96];
     cpk_arr.copy_from_slice(&collective_pk_bytes);
     let collective_pk = sigimora_math::G2Point::from_bytes(&cpk_arr)
@@ -58,6 +73,11 @@ pub async fn trace_signers(
     let tracking_pk_bytes = net_row.tracking_pk.ok_or_else(|| {
         ApiError::Internal("tracking PK missing".to_string())
     })?;
+    if tracking_pk_bytes.len() != 96 {
+        return Err(ApiError::Internal(
+            format!("tracking PK has invalid length {}", tracking_pk_bytes.len()),
+        ));
+    }
     let mut tpk_arr = [0u8; 96];
     tpk_arr.copy_from_slice(&tracking_pk_bytes);
     let tracking_pk = sigimora_math::G2Point::from_bytes(&tpk_arr)
@@ -66,6 +86,11 @@ pub async fn trace_signers(
     let node_rows = state.db.get_nodes_by_network(&network_id).await?;
     let mut member_pks = Vec::new();
     for row in &node_rows {
+        if row.public_key.len() != 96 {
+            return Err(ApiError::Internal(
+                format!("node {} PK has invalid length {}", row.node_id, row.public_key.len()),
+            ));
+        }
         let mut b = [0u8; 96];
         b.copy_from_slice(&row.public_key);
         let pk = sigimora_math::G2Point::from_bytes(&b)

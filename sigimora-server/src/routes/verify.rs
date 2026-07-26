@@ -24,6 +24,11 @@ pub async fn verify_signature(
     let collective_pk_bytes = net_row.collective_pk.ok_or_else(|| {
         ApiError::BadRequest("collective PK not available — run DKG first".to_string())
     })?;
+    if collective_pk_bytes.len() != 96 {
+        return Err(ApiError::Internal(
+            format!("collective PK has invalid length {}", collective_pk_bytes.len()),
+        ));
+    }
     let mut pk_arr = [0u8; 96];
     pk_arr.copy_from_slice(&collective_pk_bytes);
     let collective_pk = sigimora_math::G2Point::from_bytes(&pk_arr)
@@ -33,9 +38,15 @@ pub async fn verify_signature(
     let msg = hex::decode(&req.message)
         .map_err(|e| ApiError::BadRequest(format!("invalid hex message: {}", e)))?;
 
-    // Decode signature
-    let sig_bytes = hex::decode(&req.signature_hex)
+    // Decode signature (must be exactly 48 bytes for a G1 point)
+    let sig_hex = &req.signature_hex;
+    let sig_bytes = hex::decode(sig_hex)
         .map_err(|e| ApiError::BadRequest(format!("invalid hex signature: {}", e)))?;
+    if sig_bytes.len() != 48 {
+        return Err(ApiError::BadRequest(
+            format!("signature must be 48 bytes (96 hex chars), got {} bytes", sig_bytes.len()),
+        ));
+    }
     let mut sig_arr = [0u8; 48];
     sig_arr.copy_from_slice(&sig_bytes);
     let sig = sigimora_math::G1Point::from_bytes(&sig_arr)
