@@ -1,6 +1,7 @@
 //! Route module aggregator.
 
 pub mod api_keys;
+pub mod audit;
 pub mod batch;
 pub mod dkg;
 pub mod extractor;

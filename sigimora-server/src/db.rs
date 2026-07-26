@@ -112,14 +112,22 @@ pub struct Database {
 
 impl Database {
     /// Open (or create) the SQLite database and run migrations.
-    pub async fn open(database_url: &str) -> Result<Self, ApiError> {
+    ///
+    /// `pool_size`: max connections in the pool (default: 8).
+    /// `busy_timeout_ms`: SQLite busy timeout in ms (default: 5000).
+    pub async fn open(
+        database_url: &str,
+        pool_size: u32,
+        busy_timeout_ms: u32,
+    ) -> Result<Self, ApiError> {
         let opts = SqliteConnectOptions::from_str(database_url)?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_millis(busy_timeout_ms as u64));
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
+            .max_connections(pool_size)
             .connect_with(opts)
             .await?;
 
@@ -467,6 +475,19 @@ impl Database {
         Ok(())
     }
 
+    pub async fn list_audit_logs_paginated(
+        &self, offset: usize, limit: usize,
+    ) -> Result<Vec<AuditLogRow>, ApiError> {
+        let rows = sqlx::query_as::<_, AuditLogRow>(
+            "SELECT id, timestamp, action, actor, target, details FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?",
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn count_audit_logs(&self) -> Result<usize, ApiError> {
         let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_log")
             .fetch_one(&self.pool)
@@ -562,4 +583,14 @@ pub struct SignedTxRow {
     pub signature: Vec<u8>,
     pub quorum: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AuditLogRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub action: String,
+    pub actor: String,
+    pub target: String,
+    pub details: String,
 }

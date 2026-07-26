@@ -245,6 +245,28 @@ pub struct PaginatedApiKeysResponse {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+//  Audit log
+// ══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize)]
+pub struct AuditLogEntry {
+    pub id: i64,
+    pub timestamp: String,
+    pub action: String,
+    pub actor: String,
+    pub target: String,
+    pub details: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedAuditLogsResponse {
+    pub entries: Vec<AuditLogEntry>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 //  Generic pagination / listing
 // ══════════════════════════════════════════════════════════════════════════
 

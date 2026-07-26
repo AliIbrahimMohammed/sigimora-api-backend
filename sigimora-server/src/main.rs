@@ -78,6 +78,7 @@ use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+use clap::Parser;
 use crate::config::ServerConfig;
 use crate::state::AppState;
 
@@ -145,7 +146,9 @@ async fn request_id_middleware(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ServerConfig::from_env();
+    // Load .env file first (silently ignored if missing), then parse CLI + env
+    let _ = dotenvy::dotenv();
+    let config = ServerConfig::parse();
     config.ensure_dirs()?;
 
     // ── Setup logging + OpenTelemetry ──────────────────────────────────
@@ -184,7 +187,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Open database ───────────────────────────────────────────────────
     let database_url = config.database_url();
     tracing::info!("Database: {}", database_url);
-    let db = crate::db::Database::open(&database_url).await?;
+    let db = crate::db::Database::open(
+        &database_url,
+        config.db_pool_size,
+        config.db_busy_timeout_ms,
+    ).await?;
 
     // Register DB for audit logging
     crate::audit::set_audit_db(db.clone());
@@ -305,11 +312,40 @@ async fn ensure_bootstrap_key(
 
 /// Rate limiting middleware — check against AppState per IP.
 /// Sets X-RateLimit-* headers on every response (GitHub-style).
+/// Admin API keys bypass rate limiting entirely.
 async fn rate_limit_middleware(
     State(state): State<AppState>,
     req: axum::extract::Request,
     next: middleware::Next,
 ) -> Response {
+    // Admin keys bypass rate limiting
+    {
+        let auth_header = req
+            .headers()
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok());
+
+        let is_admin = match auth_header {
+            Some(h) if h.starts_with("Bearer ") => {
+                let key = &h[7..];
+                if key.len() < 16 || key.len() > 256 {
+                    false
+                } else {
+                    let hash = crate::auth::sha256_hex(key);
+                    match state.db.get_api_key_by_hash(&hash).await {
+                        Ok(Some(row)) => row.role == "admin",
+                        _ => false,
+                    }
+                }
+            }
+            _ => false,
+        };
+
+        if is_admin {
+            return next.run(req).await;
+        }
+    }
+
     let ip = req
         .extensions()
         .get::<std::net::SocketAddr>()
@@ -434,6 +470,8 @@ fn build_router(
             "/api/v1/networks/{id}/nodes/{node_id}",
             get(routes::identity::get_node),
         )
+        // Audit log (admin)
+        .route("/api/v1/audit-logs", get(routes::audit::list_audit_logs))
         // API Keys (admin)
         .route(
             "/api/v1/api-keys",
